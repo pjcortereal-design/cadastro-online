@@ -472,15 +472,17 @@
 
 <script>
 // ═══════════════════════════════════════════════════════════════════
-// CONFIGURAÇÃO
+// CONFIGURAÇÃO — SUPABASE
 // ═══════════════════════════════════════════════════════════════════
 
-// Endpoint do backend que vai receber a ficha completa.
-// Quando configurar Supabase/Vercel, troque pra URL real (ex:
-// 'https://api.altares.com.br/fichas' ou Supabase Edge Function).
-// Enquanto null, o sistema entra em "modo offline" — gera código
-// copiável que o cliente cola no WhatsApp e o vendedor importa manualmente.
-const ENDPOINT_API = null;
+// URL do projeto Supabase + chave publishable.
+// A chave publishable é segura no frontend porque o Row Level Security
+// configurado na tabela 'fichas' permite apenas INSERT por anônimos.
+// Se as duas constantes forem null/vazias, o sistema cai em modo offline
+// (mostra o JSON pra cliente copiar e enviar pelo WhatsApp).
+const SUPABASE_URL = 'https://tclpjgqaezyfrnyyxiio.supabase.co';
+const SUPABASE_ANON_KEY = 'sb_publishable_pcpmnr8Ixldvg2sFDBMiCg_S96BnVoy';
+const ENDPOINT_API = SUPABASE_URL + '/rest/v1/fichas';
 
 // ═══════════════════════════════════════════════════════════════════
 // HELPERS
@@ -827,22 +829,56 @@ async function submitFicha(){
   btn.disabled = true;
   btn.textContent = '⏳ Enviando...';
 
-  // Modo offline (sem backend configurado): mostra JSON copiável
-  if(!ENDPOINT_API){
-    console.log('[ficha] Modo offline — backend não configurado.');
+  // Modo offline (sem Supabase configurado): mostra JSON copiável
+  if(!SUPABASE_URL || !SUPABASE_ANON_KEY){
+    console.log('[ficha] Modo offline — Supabase não configurado.');
     showOfflineScreen(payload);
+    btn.disabled = false;
+    btn.textContent = '📨 ENVIAR CADASTRO';
     return;
   }
 
-  // Modo online: envia pro backend
+  // Achata o payload aninhado em colunas individuais da tabela 'fichas',
+  // mas guarda também o objeto completo na coluna 'dados_completos' (JSONB)
+  // para preservar todos os detalhes (diocese, referência etc.).
+  const supabaseRow = {
+    codigo: payload.fichaCode,
+    status: 'pendente',
+    trat_tipo: payload.tratamento.tipo || null,
+    trat_funcao: payload.tratamento.funcao || null,
+    nome_completo: payload.pessoal.nome,
+    cpf: payload.pessoal.cpf,
+    whatsapp: payload.pessoal.whatsapp,
+    email: payload.pessoal.email || null,
+    tipo_compra: payload.tipoCompra,
+    cnpj: payload.paroquia ? payload.paroquia.cnpj : null,
+    paroquia_nome: payload.paroquia ? payload.paroquia.nome : null,
+    cep: payload.enderecoEnvio.cep,
+    logradouro: payload.enderecoEnvio.logradouro,
+    numero: payload.enderecoEnvio.numero,
+    complemento: payload.enderecoEnvio.complemento || null,
+    bairro: payload.enderecoEnvio.bairro,
+    cidade: payload.enderecoEnvio.cidade,
+    estado: payload.enderecoEnvio.estado,
+    enviado_em: payload.submittedAt,
+    dados_completos: payload
+  };
+
+  // Modo online: envia POST direto ao PostgREST do Supabase
   try {
     const resp = await fetch(ENDPOINT_API, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
+      headers: {
+        'Content-Type': 'application/json',
+        'apikey': SUPABASE_ANON_KEY,
+        'Authorization': 'Bearer ' + SUPABASE_ANON_KEY,
+        'Prefer': 'return=minimal'
+      },
+      body: JSON.stringify(supabaseRow)
     });
     if(!resp.ok){
-      throw new Error('Servidor retornou ' + resp.status);
+      const errText = await resp.text();
+      throw new Error('Servidor retornou ' + resp.status + ' — ' + errText);
     }
     showSuccessScreen();
   } catch(e){
@@ -851,7 +887,7 @@ async function submitFicha(){
     showOfflineScreen(payload);
   } finally {
     btn.disabled = false;
-    btn.textContent = '📨 ENVIAR FICHA';
+    btn.textContent = '📨 ENVIAR CADASTRO';
   }
 }
 
